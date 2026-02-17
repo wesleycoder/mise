@@ -665,7 +665,7 @@ impl EnvResults {
         let mut output = input.to_string();
 
         // Step 1: Tera template expansion
-        if input.contains("{{") || input.contains("{%") || input.contains("{#") {
+        if input.contains("{{") || input.contains("{%") {
             trust_check(path)?;
             output = tera
                 .render_str(input, ctx)

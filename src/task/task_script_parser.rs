@@ -485,10 +485,9 @@ impl TaskScriptParser {
 
                 for pattern in sources.iter() {
                     // pattern is considered a tera template string if it contains opening tags:
-                    // - "{#" for comments
                     // - "{{" for expressions
                     // - "{%" for statements
-                    if pattern.contains("{#") || pattern.contains("{{") || pattern.contains("{%") {
+                    if pattern.contains("{{") || pattern.contains("{%") {
                         trace!(
                             "tera::render::resolve_task_sources including tera template string in resolved task sources: {pattern}"
                         );

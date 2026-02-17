@@ -155,7 +155,10 @@ impl MiseToml {
         Ok(())
     }
     fn contains_template_syntax(input: &str) -> bool {
-        input.contains("{{") || input.contains("{%") || input.contains("{#")
+        // Note: {# is intentionally excluded. Tera comments ({# ... #}) are
+        // no-ops that produce empty output, so detecting them only causes
+        // false positives with expr-lang's {#.field} closure syntax.
+        input.contains("{{") || input.contains("{%")
     }
 
     pub fn init(path: &Path) -> Self {
