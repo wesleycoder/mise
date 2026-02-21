@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::backend::backend_type::BackendType;
@@ -163,7 +163,7 @@ impl Lock {
         }
     }
 
-    fn determine_target_platforms(&self, lockfile_path: &PathBuf) -> Result<Vec<Platform>> {
+    fn determine_target_platforms(&self, lockfile_path: &Path) -> Result<Vec<Platform>> {
         if !self.platform.is_empty() {
             // User specified platforms explicitly
             return Platform::parse_multiple(&self.platform);

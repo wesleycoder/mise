@@ -653,9 +653,15 @@ pub fn update_lockfiles(config: &Config, ts: &Toolset, new_versions: &[ToolVersi
 /// Determine target platforms for lockfile operations.
 /// Returns the 5 common platforms + current platform + any existing platforms in the lockfile.
 pub fn determine_target_platforms(lockfile_path: &Path) -> Vec<Platform> {
+    let lockfile = Lockfile::read(lockfile_path).ok();
+    determine_target_platforms_from_lockfile(lockfile.as_ref())
+}
+
+/// Determine target platforms using an already-loaded lockfile.
+fn determine_target_platforms_from_lockfile(lockfile: Option<&Lockfile>) -> Vec<Platform> {
     let mut platforms: BTreeSet<Platform> = Platform::common_platforms().into_iter().collect();
     platforms.insert(Platform::current());
-    if let Ok(lockfile) = Lockfile::read(lockfile_path) {
+    if let Some(lockfile) = lockfile {
         for platform_key in lockfile.all_platform_keys() {
             if let Ok(p) = Platform::parse(&platform_key)
                 && p.validate().is_ok()
@@ -699,7 +705,7 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
         let mut lockfile = Lockfile::read(&lockfile_path)
             .unwrap_or_else(|err| handle_lockfile_read_error(err, &lockfile_path));
 
-        let target_platforms = determine_target_platforms(&lockfile_path);
+        let target_platforms = determine_target_platforms_from_lockfile(Some(&lockfile));
 
         let semaphore = Arc::new(Semaphore::new(jobs));
         let mut jset: JoinSet<AutoLockResult> = JoinSet::new();
@@ -732,11 +738,11 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
                     let semaphore = semaphore.clone();
                     let ba = ba.clone();
                     let tv = (*tv).clone();
+                    let backend = backend.clone();
 
                     jset.spawn(async move {
                         let _permit = semaphore.acquire().await;
                         let target = PlatformTarget::new(variant.clone());
-                        let backend = crate::backend::get(&ba);
 
                         let (info, options, conda_packages) = if let Some(backend) = backend {
                             let options = backend.resolve_lockfile_options(&tv.request, &target);
