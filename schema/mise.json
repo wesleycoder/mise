@@ -1677,7 +1677,15 @@
           "type": "array"
         },
         {
-          "$ref": "#/$defs/task_props"
+          "$ref": "#/$defs/task_props",
+          "additionalProperties": {
+            "extends": {
+              "description": "name of the task template to extend",
+              "type": "string"
+            }
+          },
+          "unevaluatedProperties": false,
+          "type": "object"
         }
       ]
     },
@@ -2243,10 +2251,6 @@
         },
         "timeout": {
           "description": "timeout for this task",
-          "type": "string"
-        },
-        "extends": {
-          "description": "name of the task template to extend",
           "type": "string"
         }
       },
