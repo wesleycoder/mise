@@ -681,9 +681,12 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
         return Ok(());
     }
 
-    // Group new_versions by lockfile path
+    // Group new_versions by lockfile path (only mise.toml sources, matching update_lockfiles)
     let mut versions_by_lockfile: HashMap<PathBuf, Vec<&ToolVersion>> = HashMap::new();
     for tv in new_versions {
+        if !tv.request.source().is_mise_toml() {
+            continue;
+        }
         if let Some(source_path) = tv.request.source().path() {
             let (lockfile_path, _) = lockfile_path_for_config(source_path);
             versions_by_lockfile
