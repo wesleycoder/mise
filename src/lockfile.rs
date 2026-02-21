@@ -1,8 +1,12 @@
+use crate::backend::backend_type::BackendType;
+use crate::backend::conda::CondaBackend;
+use crate::backend::platform_target::PlatformTarget;
 use crate::config::{Config, Settings};
 use crate::env;
 use crate::file;
 use crate::file::display_path;
 use crate::path::PathExt;
+use crate::platform::Platform;
 use crate::toolset::{ToolSource, ToolVersion, ToolVersionList, Toolset};
 use eyre::{Report, Result, bail};
 use itertools::Itertools;
@@ -15,6 +19,8 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use toml_edit::DocumentMut;
 use xx::regex;
 
@@ -643,6 +649,181 @@ pub fn update_lockfiles(config: &Config, ts: &Toolset, new_versions: &[ToolVersi
 
     Ok(())
 }
+
+/// Determine target platforms for lockfile operations.
+/// Returns the 5 common platforms + current platform + any existing platforms in the lockfile.
+pub fn determine_target_platforms(lockfile_path: &Path) -> Vec<Platform> {
+    let mut platforms: BTreeSet<Platform> = Platform::common_platforms().into_iter().collect();
+    platforms.insert(Platform::current());
+    if let Ok(lockfile) = Lockfile::read(lockfile_path) {
+        for platform_key in lockfile.all_platform_keys() {
+            if let Ok(p) = Platform::parse(&platform_key) {
+                if p.validate().is_ok() {
+                    platforms.insert(p);
+                }
+            }
+        }
+    }
+    platforms.into_iter().collect()
+}
+
+/// After installing new tool versions, resolve checksums/URLs for all common platforms
+/// so the lockfile is complete and doesn't change when other developers on different
+/// platforms run `mise install`.
+pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersion]) -> Result<()> {
+    if !Settings::get().lockfile || new_versions.is_empty() {
+        return Ok(());
+    }
+
+    // Group new_versions by lockfile path
+    let mut versions_by_lockfile: HashMap<PathBuf, Vec<&ToolVersion>> = HashMap::new();
+    for tv in new_versions {
+        if let Some(source_path) = tv.request.source().path() {
+            let (lockfile_path, _) = lockfile_path_for_config(source_path);
+            versions_by_lockfile
+                .entry(lockfile_path)
+                .or_default()
+                .push(tv);
+        }
+    }
+
+    let settings = Settings::get();
+    let jobs = settings.jobs;
+
+    for (lockfile_path, versions) in versions_by_lockfile {
+        // Only update existing lockfiles (consistent with update_lockfiles)
+        if !lockfile_path.exists() {
+            continue;
+        }
+
+        let mut lockfile = Lockfile::read(&lockfile_path)
+            .unwrap_or_else(|err| handle_lockfile_read_error(err, &lockfile_path));
+
+        let target_platforms = determine_target_platforms(&lockfile_path);
+
+        let semaphore = Arc::new(Semaphore::new(jobs));
+        let mut jset: JoinSet<AutoLockResult> = JoinSet::new();
+
+        for tv in &versions {
+            let ba = tv.ba().clone();
+            let backend = crate::backend::get(&ba);
+
+            for platform in &target_platforms {
+                // Expand platform variants from the backend
+                let variants = if let Some(ref backend) = backend {
+                    backend.platform_variants(platform)
+                } else {
+                    vec![platform.clone()]
+                };
+
+                for variant in variants {
+                    let platform_key = variant.to_key();
+
+                    // Skip if this tool/version/platform already has both checksum and URL
+                    if let Some(tools) = lockfile.tools.get(&ba.short) {
+                        if let Some(tool) = tools.iter().find(|t| t.version == tv.version) {
+                            if let Some(info) = tool.platforms.get(&platform_key) {
+                                if info.checksum.is_some() && info.url.is_some() {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    let semaphore = semaphore.clone();
+                    let ba = ba.clone();
+                    let tv = (*tv).clone();
+
+                    jset.spawn(async move {
+                        let _permit = semaphore.acquire().await;
+                        let target = PlatformTarget::new(variant.clone());
+                        let backend = crate::backend::get(&ba);
+
+                        let (info, options, conda_packages) = if let Some(backend) = backend {
+                            let options = backend.resolve_lockfile_options(&tv.request, &target);
+                            match backend.resolve_lock_info(&tv, &target).await {
+                                Ok(info) => {
+                                    let conda_packages = if backend.get_type() == BackendType::Conda
+                                    {
+                                        let conda_backend = CondaBackend::from_arg(ba.clone());
+                                        conda_backend
+                                            .resolve_conda_packages(&tv, &target)
+                                            .await
+                                            .unwrap_or_default()
+                                    } else {
+                                        BTreeMap::new()
+                                    };
+                                    (Some(info), options, conda_packages)
+                                }
+                                Err(e) => {
+                                    debug!(
+                                        "auto-lock: failed to resolve {} for {}: {}",
+                                        ba.short,
+                                        variant.to_key(),
+                                        e
+                                    );
+                                    (None, options, BTreeMap::new())
+                                }
+                            }
+                        } else {
+                            (None, BTreeMap::new(), BTreeMap::new())
+                        };
+
+                        (
+                            ba.short.clone(),
+                            tv.version.clone(),
+                            ba.full(),
+                            variant,
+                            info,
+                            options,
+                            conda_packages,
+                        )
+                    });
+                }
+            }
+        }
+
+        // Collect results and update lockfile
+        while let Some(result) = jset.join_next().await {
+            match result {
+                Ok((short, version, backend, platform, info, options, conda_packages)) => {
+                    let platform_key = platform.to_key();
+                    if let Some(info) = info {
+                        lockfile.set_platform_info(
+                            &short,
+                            &version,
+                            Some(&backend),
+                            &options,
+                            &platform_key,
+                            info,
+                        );
+                    }
+                    for (basename, pkg_info) in conda_packages {
+                        lockfile.set_conda_package(&platform_key, &basename, pkg_info);
+                    }
+                }
+                Err(e) => {
+                    debug!("auto-lock task failed: {}", e);
+                }
+            }
+        }
+
+        lockfile.save(&lockfile_path)?;
+    }
+
+    Ok(())
+}
+
+/// Result type for auto-lock tasks
+type AutoLockResult = (
+    String,
+    String,
+    String,
+    Platform,
+    Option<PlatformInfo>,
+    BTreeMap<String, String>,
+    BTreeMap<String, crate::backend::conda::CondaPackageInfo>,
+);
 
 /// Merge tool entries with environment tracking and deduplication
 /// Rules:

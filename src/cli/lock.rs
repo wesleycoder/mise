@@ -169,23 +169,7 @@ impl Lock {
             return Platform::parse_multiple(&self.platform);
         }
 
-        // Default: 5 common platforms + existing in lockfile + current platform
-        let mut platforms: BTreeSet<Platform> = Platform::common_platforms().into_iter().collect();
-        platforms.insert(Platform::current());
-
-        // Add any existing platforms from lockfile (only valid ones)
-        if let Ok(lockfile) = Lockfile::read(lockfile_path) {
-            for platform_key in lockfile.all_platform_keys() {
-                if let Ok(p) = Platform::parse(&platform_key) {
-                    // Skip invalid platforms (e.g., tool-specific qualifiers like "wait-for-gh-rate-limit")
-                    if p.validate().is_ok() {
-                        platforms.insert(p);
-                    }
-                }
-            }
-        }
-
-        Ok(platforms.into_iter().collect())
+        Ok(lockfile::determine_target_platforms(lockfile_path))
     }
 
     /// Collect tools that belong to a given lockfile pass (local or non-local).
