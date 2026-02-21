@@ -805,10 +805,18 @@ pub async fn resolve_tool_lock_info(
             Ok(info) => {
                 let conda_packages = if backend.get_type() == BackendType::Conda {
                     let conda_backend = CondaBackend::from_arg(ba.clone());
-                    conda_backend
-                        .resolve_conda_packages(&tv, &target)
-                        .await
-                        .unwrap_or_default()
+                    match conda_backend.resolve_conda_packages(&tv, &target).await {
+                        Ok(packages) => packages,
+                        Err(e) => {
+                            debug!(
+                                "failed to resolve conda packages for {} on {}: {}",
+                                ba.short,
+                                platform.to_key(),
+                                e
+                            );
+                            BTreeMap::new()
+                        }
+                    }
                 } else {
                     BTreeMap::new()
                 };
