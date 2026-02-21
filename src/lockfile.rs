@@ -657,11 +657,10 @@ pub fn determine_target_platforms(lockfile_path: &Path) -> Vec<Platform> {
     platforms.insert(Platform::current());
     if let Ok(lockfile) = Lockfile::read(lockfile_path) {
         for platform_key in lockfile.all_platform_keys() {
-            if let Ok(p) = Platform::parse(&platform_key) {
-                if p.validate().is_ok() {
+            if let Ok(p) = Platform::parse(&platform_key)
+                && p.validate().is_ok() {
                     platforms.insert(p);
                 }
-            }
         }
     }
     platforms.into_iter().collect()
@@ -720,15 +719,12 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
                     let platform_key = variant.to_key();
 
                     // Skip if this tool/version/platform already has both checksum and URL
-                    if let Some(tools) = lockfile.tools.get(&ba.short) {
-                        if let Some(tool) = tools.iter().find(|t| t.version == tv.version) {
-                            if let Some(info) = tool.platforms.get(&platform_key) {
-                                if info.checksum.is_some() && info.url.is_some() {
+                    if let Some(tools) = lockfile.tools.get(&ba.short)
+                        && let Some(tool) = tools.iter().find(|t| t.version == tv.version)
+                            && let Some(info) = tool.platforms.get(&platform_key)
+                                && info.checksum.is_some() && info.url.is_some() {
                                     continue;
                                 }
-                            }
-                        }
-                    }
 
                     let semaphore = semaphore.clone();
                     let ba = ba.clone();
