@@ -711,7 +711,7 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
         let target_platforms = determine_target_platforms_from_lockfile(Some(&lockfile));
 
         let semaphore = Arc::new(Semaphore::new(jobs));
-        let mut jset: JoinSet<AutoLockResult> = JoinSet::new();
+        let mut jset: JoinSet<LockResolutionResult> = JoinSet::new();
 
         for tv in &versions {
             let ba = tv.ba().clone();
@@ -745,47 +745,7 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
 
                     jset.spawn(async move {
                         let _permit = semaphore.acquire().await;
-                        let target = PlatformTarget::new(variant.clone());
-
-                        let (info, options, conda_packages) = if let Some(backend) = backend {
-                            let options = backend.resolve_lockfile_options(&tv.request, &target);
-                            match backend.resolve_lock_info(&tv, &target).await {
-                                Ok(info) => {
-                                    let conda_packages = if backend.get_type() == BackendType::Conda
-                                    {
-                                        let conda_backend = CondaBackend::from_arg(ba.clone());
-                                        conda_backend
-                                            .resolve_conda_packages(&tv, &target)
-                                            .await
-                                            .unwrap_or_default()
-                                    } else {
-                                        BTreeMap::new()
-                                    };
-                                    (Some(info), options, conda_packages)
-                                }
-                                Err(e) => {
-                                    debug!(
-                                        "auto-lock: failed to resolve {} for {}: {}",
-                                        ba.short,
-                                        variant.to_key(),
-                                        e
-                                    );
-                                    (None, options, BTreeMap::new())
-                                }
-                            }
-                        } else {
-                            (None, BTreeMap::new(), BTreeMap::new())
-                        };
-
-                        (
-                            ba.short.clone(),
-                            tv.version.clone(),
-                            ba.full(),
-                            variant,
-                            info,
-                            options,
-                            conda_packages,
-                        )
+                        resolve_tool_lock_info(ba, tv, variant, backend).await
                     });
                 }
             }
@@ -794,22 +754,7 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
         // Collect results and update lockfile
         while let Some(result) = jset.join_next().await {
             match result {
-                Ok((short, version, backend, platform, info, options, conda_packages)) => {
-                    let platform_key = platform.to_key();
-                    if let Some(info) = info {
-                        lockfile.set_platform_info(
-                            &short,
-                            &version,
-                            Some(&backend),
-                            &options,
-                            &platform_key,
-                            info,
-                        );
-                    }
-                    for (basename, pkg_info) in conda_packages {
-                        lockfile.set_conda_package(&platform_key, &basename, pkg_info);
-                    }
-                }
+                Ok(resolution) => apply_lock_result(&mut lockfile, resolution),
                 Err(e) => {
                     debug!("auto-lock task failed: {}", e);
                 }
@@ -822,16 +767,96 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
     Ok(())
 }
 
-/// Result type for auto-lock tasks
-type AutoLockResult = (
+/// Result type for lock resolution tasks (shared by `mise lock` and auto-lock)
+pub type LockResolutionResult = (
     String,
     String,
     String,
     Platform,
     Option<PlatformInfo>,
     BTreeMap<String, String>,
-    BTreeMap<String, crate::backend::conda::CondaPackageInfo>,
+    BTreeMap<String, CondaPackageInfo>,
 );
+
+/// Resolve lock info for a single tool/platform combination.
+///
+/// Returns a tuple of (short_name, version, backend_full, platform, info, options, conda_packages).
+/// On failure, `info` will be `None` and errors are logged at debug level.
+pub async fn resolve_tool_lock_info(
+    ba: crate::cli::args::BackendArg,
+    tv: ToolVersion,
+    platform: Platform,
+    backend: Option<crate::backend::ABackend>,
+) -> LockResolutionResult {
+    let target = PlatformTarget::new(platform.clone());
+
+    let (info, options, conda_packages) = if let Some(backend) = backend {
+        let options = backend.resolve_lockfile_options(&tv.request, &target);
+        match backend.resolve_lock_info(&tv, &target).await {
+            Ok(info) => {
+                let conda_packages = if backend.get_type() == BackendType::Conda {
+                    let conda_backend = CondaBackend::from_arg(ba.clone());
+                    match conda_backend.resolve_conda_packages(&tv, &target).await {
+                        Ok(packages) => packages,
+                        Err(e) => {
+                            debug!(
+                                "failed to resolve conda packages for {} on {}: {}",
+                                ba.short,
+                                platform.to_key(),
+                                e
+                            );
+                            BTreeMap::new()
+                        }
+                    }
+                } else {
+                    BTreeMap::new()
+                };
+                (Some(info), options, conda_packages)
+            }
+            Err(e) => {
+                debug!(
+                    "failed to resolve {} for {}: {}",
+                    ba.short,
+                    platform.to_key(),
+                    e
+                );
+                (None, options, BTreeMap::new())
+            }
+        }
+    } else {
+        debug!("backend not found for {}", ba.short);
+        (None, BTreeMap::new(), BTreeMap::new())
+    };
+
+    (
+        ba.short.clone(),
+        tv.version.clone(),
+        ba.full(),
+        platform,
+        info,
+        options,
+        conda_packages,
+    )
+}
+
+/// Apply a lock resolution result to a lockfile, updating platform info and conda packages.
+pub fn apply_lock_result(lockfile: &mut Lockfile, result: LockResolutionResult) {
+    let (short, version, backend, platform, info, options, conda_packages) = result;
+    let platform_key = platform.to_key();
+    if let Some(info) = info {
+        lockfile.set_platform_info(
+            &short,
+            &version,
+            Some(&backend),
+            &options,
+            &platform_key,
+            info,
+        );
+    }
+    for (basename, pkg_info) in conda_packages {
+        lockfile.set_conda_package(&platform_key, &basename, pkg_info);
+    }
+}
 
 /// Merge tool entries with environment tracking and deduplication
 /// Rules:
