@@ -754,7 +754,12 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
         // Collect results and update lockfile
         while let Some(result) = jset.join_next().await {
             match result {
-                Ok(resolution) => apply_lock_result(&mut lockfile, resolution),
+                Ok(resolution) => {
+                    if let Err(msg) = &resolution.4 {
+                        debug!("auto-lock: {msg}");
+                    }
+                    apply_lock_result(&mut lockfile, resolution);
+                }
                 Err(e) => {
                     debug!("auto-lock task failed: {}", e);
                 }
@@ -767,21 +772,25 @@ pub async fn auto_lock_new_versions(_config: &Config, new_versions: &[ToolVersio
     Ok(())
 }
 
-/// Result type for lock resolution tasks (shared by `mise lock` and auto-lock)
+/// Result type for lock resolution tasks (shared by `mise lock` and auto-lock).
+///
+/// Fields: (short_name, version, backend_full, platform, info_or_error, options, conda_packages).
+/// The `info_or_error` field is `Ok(info)` on success or `Err(message)` on failure,
+/// allowing callers to log at the appropriate level.
 pub type LockResolutionResult = (
     String,
     String,
     String,
     Platform,
-    Option<PlatformInfo>,
+    Result<PlatformInfo, String>,
     BTreeMap<String, String>,
     BTreeMap<String, CondaPackageInfo>,
 );
 
 /// Resolve lock info for a single tool/platform combination.
 ///
-/// Returns a tuple of (short_name, version, backend_full, platform, info, options, conda_packages).
-/// On failure, `info` will be `None` and errors are logged at debug level.
+/// Returns a tuple of (short_name, version, backend_full, platform, info_or_error, options, conda_packages).
+/// Does not log errors — callers decide the appropriate log level.
 pub async fn resolve_tool_lock_info(
     ba: crate::cli::args::BackendArg,
     tv: ToolVersion,
@@ -796,36 +805,32 @@ pub async fn resolve_tool_lock_info(
             Ok(info) => {
                 let conda_packages = if backend.get_type() == BackendType::Conda {
                     let conda_backend = CondaBackend::from_arg(ba.clone());
-                    match conda_backend.resolve_conda_packages(&tv, &target).await {
-                        Ok(packages) => packages,
-                        Err(e) => {
-                            debug!(
-                                "failed to resolve conda packages for {} on {}: {}",
-                                ba.short,
-                                platform.to_key(),
-                                e
-                            );
-                            BTreeMap::new()
-                        }
-                    }
+                    conda_backend
+                        .resolve_conda_packages(&tv, &target)
+                        .await
+                        .unwrap_or_default()
                 } else {
                     BTreeMap::new()
                 };
-                (Some(info), options, conda_packages)
+                (Ok(info), options, conda_packages)
             }
-            Err(e) => {
-                debug!(
+            Err(e) => (
+                Err(format!(
                     "failed to resolve {} for {}: {}",
                     ba.short,
                     platform.to_key(),
                     e
-                );
-                (None, options, BTreeMap::new())
-            }
+                )),
+                options,
+                BTreeMap::new(),
+            ),
         }
     } else {
-        debug!("backend not found for {}", ba.short);
-        (None, BTreeMap::new(), BTreeMap::new())
+        (
+            Err(format!("backend not found for {}", ba.short)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        )
     };
 
     (
@@ -840,10 +845,11 @@ pub async fn resolve_tool_lock_info(
 }
 
 /// Apply a lock resolution result to a lockfile, updating platform info and conda packages.
+/// Only applies data when the resolution succeeded (info is `Ok`).
 pub fn apply_lock_result(lockfile: &mut Lockfile, result: LockResolutionResult) {
     let (short, version, backend, platform, info, options, conda_packages) = result;
     let platform_key = platform.to_key();
-    if let Some(info) = info {
+    if let Ok(info) = info {
         lockfile.set_platform_info(
             &short,
             &version,

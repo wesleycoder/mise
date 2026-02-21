@@ -362,7 +362,10 @@ impl Lock {
                     let short = resolution.0.clone();
                     let version = resolution.1.clone();
                     let platform_key = resolution.3.to_key();
-                    let ok = resolution.4.is_some();
+                    let ok = resolution.4.is_ok();
+                    if let Err(msg) = &resolution.4 {
+                        debug!("{msg}");
+                    }
                     pr.set_message(format!("{}@{} {}", short, version, platform_key));
                     pr.set_position(completed);
                     lockfile::apply_lock_result(lockfile, resolution);
