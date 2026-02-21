@@ -1,5 +1,33 @@
 # Changelog
 
+## [2026.2.18](https://github.com/jdx/mise/compare/v2026.2.17..v2026.2.18) - 2026-02-21
+
+### 🐛 Bug Fixes
+
+- **(exec)** strip shims from PATH on Unix to prevent infinite recursion by @jdx in [#8276](https://github.com/jdx/mise/pull/8276)
+- **(task)** avoid duplicated stderr on task failure in replacing mode by @jdx in [#8275](https://github.com/jdx/mise/pull/8275)
+- **(task)** use process groups to kill child process trees on Unix by @jdx in [#8279](https://github.com/jdx/mise/pull/8279)
+- **(task)** run depends_post tasks even when parent task fails by @jdx in [#8274](https://github.com/jdx/mise/pull/8274)
+- **(watch)** restore terminal state after watchexec exits by @jdx in [#8273](https://github.com/jdx/mise/pull/8273)
+
+### 📚 Documentation
+
+- clarify that MISE_CEILING_PATHS excludes the ceiling directory itself by @jdx in [#8283](https://github.com/jdx/mise/pull/8283)
+
+### 📦 Aqua Registry Updates
+
+#### New Packages (4)
+
+- [`Skarlso/crd-to-sample-yaml`](https://github.com/Skarlso/crd-to-sample-yaml)
+- [`kunobi-ninja/kunobi-releases`](https://github.com/kunobi-ninja/kunobi-releases)
+- [`swanysimon/markdownlint-rs`](https://github.com/swanysimon/markdownlint-rs)
+- [`tmux/tmux-builds`](https://github.com/tmux/tmux-builds)
+
+#### Updated Packages (2)
+
+- [`firecow/gitlab-ci-local`](https://github.com/firecow/gitlab-ci-local)
+- [`k1LoW/runn`](https://github.com/k1LoW/runn)
+
 ## [2026.2.17](https://github.com/jdx/mise/compare/v2026.2.16..v2026.2.17) - 2026-02-19
 
 ### 🚀 Features
