@@ -19,21 +19,7 @@
           "type": "array"
         },
         {
-          "allOf": [
-            {
-              "$ref": "#/$defs/task_props"
-            },
-            {
-              "properties": {
-                "extends": {
-                  "description": "name of the task template to extend",
-                  "type": "string"
-                }
-              }
-            }
-          ],
-          "unevaluatedProperties": false,
-          "type": "object"
+          "$ref": "#/$defs/task_props"
         }
       ]
     },
@@ -439,13 +425,7 @@
     },
     "task_template": {
       "description": "task template that can be extended by tasks",
-      "allOf": [
-        {
-          "$ref": "#/$defs/task_props"
-        }
-      ],
-      "unevaluatedProperties": false,
-      "type": "object"
+      "$ref": "#/$defs/task_props"
     },
     "task_props": {
       "description": "common task properties",
@@ -708,8 +688,13 @@
         "timeout": {
           "description": "timeout for this task",
           "type": "string"
+        },
+        "extends": {
+          "description": "name of the task template to extend",
+          "type": "string"
         }
       },
+      "additionalProperties": false,
       "type": "object"
     }
   },
